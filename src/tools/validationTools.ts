@@ -1,4 +1,5 @@
 import { z } from "zod";
+import * as path from "path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   readDataFile,
@@ -58,10 +59,11 @@ export function registerValidationTools(server: McpServer): void {
 
       // Helper to safely load a file
       function load<T>(name: string): T | null {
+        const filePath = path.join(projectPath, "data", name.endsWith(".json") ? name : `${name}.json`);
         try {
           return readDataFile<T>(projectPath, name);
         } catch (e) {
-          issues.push({ file: name, message: `Could not read: ${(e as Error).message}` });
+          issues.push({ file: name, message: `Could not read ${filePath}: ${(e as Error).message}` });
           return null;
         }
       }

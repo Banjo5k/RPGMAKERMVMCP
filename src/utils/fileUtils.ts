@@ -36,7 +36,7 @@ export function writeDataFile(
     fs.mkdirSync(dir, { recursive: true });
   }
 
-  const content = JSON.stringify(data, null, 0);
+  const content = JSON.stringify(data, null, 2);
   fs.writeFileSync(filePath, content, "utf-8");
 }
 
