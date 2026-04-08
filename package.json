@@ -1,0 +1,44 @@
+{
+  "name": "rpgmaker-mv-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for interacting with RPG Maker MV project data",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "rpgmaker-mv-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Banjo5k/RPGMAKERMVMCP.git"
+  },
+  "keywords": [
+    "mcp",
+    "rpgmaker",
+    "rpg-maker-mv",
+    "gemini",
+    "ai",
+    "game-development"
+  ],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Banjo5k/RPGMAKERMVMCP/issues"
+  },
+  "homepage": "https://github.com/Banjo5k/RPGMAKERMVMCP#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "esbuild": "^0.25.2",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3"
+  }
+}

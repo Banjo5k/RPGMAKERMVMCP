@@ -1,0 +1,5 @@
+node_modules/
+dist/
+*.bak
+*.js.map
+.DS_Store
