@@ -30,7 +30,7 @@ function atomicWriteFile(filePath: string, content: string): void {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 10)}.tmp`;
   try {
     fs.writeFileSync(tmpPath, content, "utf-8");
     fs.renameSync(tmpPath, filePath);

@@ -272,7 +272,7 @@ export function registerValidationTools(server: McpServer): void {
         .min(1)
         .regex(
           /^[A-Za-z_][A-Za-z0-9_]*$/,
-          "referenceType must be a JSON property identifier (letters, digits, underscore)."
+          "referenceType must be a JSON property identifier (start with a letter or underscore, followed by letters, digits or underscores)."
         )
         .describe(
           'The type of thing being referenced, e.g. "actorId", "skillId", "itemId", "enemyId", "stateId", "troopId", "animationId", "switchId", "variableId".'
