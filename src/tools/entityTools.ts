@@ -7,6 +7,7 @@ import {
   upsertRecord,
   deleteRecord,
 } from "../utils/fileUtils.js";
+import { safeHandler, parseJsonObject } from "../utils/toolUtils.js";
 import type {
   RPGActor,
   RPGClass,
@@ -53,7 +54,7 @@ function makeDbTools<T extends { id: number }>(
         .describe("Absolute path to the RPG Maker MV project root."),
       id: z.number().int().positive().describe(`${entity} ID (1-based).`),
     },
-    async ({ projectPath, id }) => {
+    safeHandler(async ({ projectPath, id }) => {
       const db = readDataFile<DB<T>>(projectPath, fileName);
       const record = findById(db, id);
       if (!record) {
@@ -65,7 +66,7 @@ function makeDbTools<T extends { id: number }>(
       return {
         content: [{ type: "text", text: JSON.stringify(record, null, 2) }],
       };
-    }
+    })
   );
 
   // ── list ─────────────────────────────────────────────────────────────────
@@ -77,7 +78,7 @@ function makeDbTools<T extends { id: number }>(
         .string()
         .describe("Absolute path to the RPG Maker MV project root."),
     },
-    async ({ projectPath }) => {
+    safeHandler(async ({ projectPath }) => {
       const db = readDataFile<DB<T & { name?: string }>>(projectPath, fileName);
       const items = db
         .filter((x): x is T & { name?: string } => x !== null)
@@ -86,11 +87,14 @@ function makeDbTools<T extends { id: number }>(
         content: [
           {
             type: "text",
-            text: items.length > 0 ? items.join("\n") : `No ${pluralSnake.replace(/_/g, " ")} found.`,
+            text:
+              items.length > 0
+                ? items.join("\n")
+                : `No ${pluralSnake.replace(/_/g, " ")} found.`,
           },
         ],
       };
-    }
+    })
   );
 
   // ── create / update ───────────────────────────────────────────────────────
@@ -105,16 +109,20 @@ function makeDbTools<T extends { id: number }>(
         .string()
         .describe(`JSON string representing the ${entity} object.`),
     },
-    async ({ projectPath, data }) => {
-      let record: T;
-      try {
-        record = JSON.parse(data) as T;
-      } catch (e) {
+    safeHandler(async ({ projectPath, data }) => {
+      const obj = parseJsonObject(data, `${entity} data`);
+      if (typeof obj.id !== "number" || !Number.isInteger(obj.id) || obj.id < 0) {
         return {
           isError: true,
-          content: [{ type: "text", text: `Invalid JSON: ${(e as Error).message}` }],
+          content: [
+            {
+              type: "text",
+              text: `${entity} data must include an integer "id" >= 0 (use 0 to create a new record).`,
+            },
+          ],
         };
       }
+      const record = obj as unknown as T;
       const db = readDataFile<DB<T>>(projectPath, fileName);
       const updated = upsertRecord(db, record);
       writeDataFile(projectPath, fileName, updated);
@@ -126,7 +134,7 @@ function makeDbTools<T extends { id: number }>(
           },
         ],
       };
-    }
+    })
   );
 
   // ── delete ────────────────────────────────────────────────────────────────
@@ -139,8 +147,16 @@ function makeDbTools<T extends { id: number }>(
         .describe("Absolute path to the RPG Maker MV project root."),
       id: z.number().int().positive().describe(`${entity} ID to delete.`),
     },
-    async ({ projectPath, id }) => {
+    safeHandler(async ({ projectPath, id }) => {
       const db = readDataFile<DB<T>>(projectPath, fileName);
+      if (id >= db.length || db[id] == null) {
+        return {
+          isError: true,
+          content: [
+            { type: "text", text: `${entity} ID ${id} does not exist.` },
+          ],
+        };
+      }
       const updated = deleteRecord(db, id);
       writeDataFile(projectPath, fileName, updated);
       return {
@@ -148,7 +164,7 @@ function makeDbTools<T extends { id: number }>(
           { type: "text", text: `${entity} ID ${id} deleted (slot set to null).` },
         ],
       };
-    }
+    })
   );
 }
 

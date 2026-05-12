@@ -7,6 +7,7 @@ import {
   listMapFiles,
   validateProjectPath,
 } from "../utils/fileUtils.js";
+import { safeHandler } from "../utils/toolUtils.js";
 import type {
   RPGActor,
   RPGClass,
@@ -53,17 +54,24 @@ export function registerValidationTools(server: McpServer): void {
         .string()
         .describe("Absolute path to the RPG Maker MV project root."),
     },
-    async ({ projectPath }) => {
+    safeHandler(async ({ projectPath }) => {
       validateProjectPath(projectPath);
       const issues: Issue[] = [];
 
       // Helper to safely load a file
       function load<T>(name: string): T | null {
-        const filePath = path.join(projectPath, "data", name.endsWith(".json") ? name : `${name}.json`);
+        const filePath = path.join(
+          projectPath,
+          "data",
+          name.endsWith(".json") ? name : `${name}.json`
+        );
         try {
           return readDataFile<T>(projectPath, name);
         } catch (e) {
-          issues.push({ file: name, message: `Could not read ${filePath}: ${(e as Error).message}` });
+          issues.push({
+            file: name,
+            message: `Could not read ${filePath}: ${(e as Error).message}`,
+          });
           return null;
         }
       }
@@ -74,7 +82,7 @@ export function registerValidationTools(server: McpServer): void {
         if (!system.gameTitle) {
           issues.push({ file: "System", message: "gameTitle is empty." });
         }
-        if (system.startMapId <= 0) {
+        if (typeof system.startMapId !== "number" || system.startMapId <= 0) {
           issues.push({ file: "System", message: "startMapId must be > 0." });
         }
         if (!system.partyMembers || system.partyMembers.length === 0) {
@@ -82,17 +90,24 @@ export function registerValidationTools(server: McpServer): void {
         }
       }
 
+      // Load Classes once and reuse for the Actor cross-reference check.
+      const classes = load<(RPGClass | null)[]>("Classes");
+
       // ── Actors ───────────────────────────────────────────────────────────
       const actors = load<(RPGActor | null)[]>("Actors");
       if (actors) {
         checkIds(actors, "Actors", issues);
-        const classes = load<(RPGClass | null)[]>("Classes");
         actors.forEach((actor) => {
           if (!actor) return;
           if (!actor.name) {
             issues.push({ file: "Actors", message: `Actor ID ${actor.id} has no name.` });
           }
-          if (classes && (actor.classId <= 0 || actor.classId >= classes.length || !classes[actor.classId])) {
+          if (
+            classes &&
+            (actor.classId <= 0 ||
+              actor.classId >= classes.length ||
+              !classes[actor.classId])
+          ) {
             issues.push({
               file: "Actors",
               message: `Actor ID ${actor.id} references invalid classId ${actor.classId}.`,
@@ -102,7 +117,6 @@ export function registerValidationTools(server: McpServer): void {
       }
 
       // ── Classes ──────────────────────────────────────────────────────────
-      const classes = load<(RPGClass | null)[]>("Classes");
       if (classes) {
         checkIds(classes, "Classes", issues);
         classes.forEach((cls) => {
@@ -140,7 +154,7 @@ export function registerValidationTools(server: McpServer): void {
           if (!item.name) {
             issues.push({ file: "Items", message: `Item ID ${item.id} has no name.` });
           }
-          if (item.price < 0) {
+          if (typeof item.price === "number" && item.price < 0) {
             issues.push({
               file: "Items",
               message: `Item ID ${item.id} has negative price.`,
@@ -200,18 +214,24 @@ export function registerValidationTools(server: McpServer): void {
         const baseName = mapFile.replace(/\.json$/, "");
         const map = load<RPGMap>(baseName);
         if (map) {
-          if (map.width <= 0 || map.height <= 0) {
+          if (
+            typeof map.width !== "number" ||
+            typeof map.height !== "number" ||
+            map.width <= 0 ||
+            map.height <= 0
+          ) {
             issues.push({
               file: baseName,
               message: `Map has invalid dimensions: ${map.width}x${map.height}.`,
             });
-          }
-          const expectedTileCount = map.width * map.height * 6; // 6 layers
-          if (map.data && map.data.length !== expectedTileCount) {
-            issues.push({
-              file: baseName,
-              message: `Tile data length mismatch. Expected ${expectedTileCount}, got ${map.data.length}.`,
-            });
+          } else {
+            const expectedTileCount = map.width * map.height * 6; // 6 layers
+            if (Array.isArray(map.data) && map.data.length !== expectedTileCount) {
+              issues.push({
+                file: baseName,
+                message: `Tile data length mismatch. Expected ${expectedTileCount}, got ${map.data.length}.`,
+              });
+            }
           }
         }
       }
@@ -236,7 +256,7 @@ export function registerValidationTools(server: McpServer): void {
           },
         ],
       };
-    }
+    })
   );
 
   // ── find_references ───────────────────────────────────────────────────────
@@ -249,15 +269,31 @@ export function registerValidationTools(server: McpServer): void {
         .describe("Absolute path to the RPG Maker MV project root."),
       referenceType: z
         .string()
+        .min(1)
+        .regex(
+          /^[A-Za-z_][A-Za-z0-9_]*$/,
+          "referenceType must be a JSON property identifier (start with a letter or underscore, followed by letters, digits or underscores)."
+        )
         .describe(
           'The type of thing being referenced, e.g. "actorId", "skillId", "itemId", "enemyId", "stateId", "troopId", "animationId", "switchId", "variableId".'
         ),
       referenceId: z.number().int().positive().describe("The ID to search for."),
     },
-    async ({ projectPath, referenceType, referenceId }) => {
+    safeHandler(async ({ projectPath, referenceType, referenceId }) => {
       validateProjectPath(projectPath);
-      const results: string[] = [];
+      const results = new Set<string>();
+
+      // listDataFiles already includes Map*.json, so don't iterate map files
+      // separately — that double-counted files in the previous version.
       const files = listDataFiles(projectPath);
+
+      // Match `"<type>": <id>` where the next char is a non-digit (or end of
+      // string). This avoids false positives like `actorId=1` matching
+      // `"actorId":12`.
+      const escapedType = referenceType.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const pattern = new RegExp(
+        `"${escapedType}"\\s*:\\s*${referenceId}(?!\\d)`
+      );
 
       for (const file of files) {
         const baseName = file.replace(/\.json$/, "");
@@ -268,40 +304,23 @@ export function registerValidationTools(server: McpServer): void {
           continue;
         }
         const text = JSON.stringify(data);
-        const pattern = `"${referenceType}":${referenceId}`;
-        if (text.includes(pattern)) {
-          results.push(file);
+        if (pattern.test(text)) {
+          results.add(file);
         }
       }
 
-      // Also check map files
-      const mapFiles = listMapFiles(projectPath);
-      for (const file of mapFiles) {
-        const baseName = file.replace(/\.json$/, "");
-        let data: unknown;
-        try {
-          data = readDataFile<unknown>(projectPath, baseName);
-        } catch {
-          continue;
-        }
-        const text = JSON.stringify(data);
-        const pattern = `"${referenceType}":${referenceId}`;
-        if (text.includes(pattern) && !results.includes(file)) {
-          results.push(file);
-        }
-      }
-
+      const sorted = [...results].sort();
       return {
         content: [
           {
             type: "text",
             text:
-              results.length > 0
-                ? `Found references to ${referenceType}=${referenceId} in:\n${results.join("\n")}`
+              sorted.length > 0
+                ? `Found references to ${referenceType}=${referenceId} in:\n${sorted.join("\n")}`
                 : `No references to ${referenceType}=${referenceId} found.`,
           },
         ],
       };
-    }
+    })
   );
 }

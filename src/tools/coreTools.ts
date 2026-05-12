@@ -7,6 +7,7 @@ import {
   listMapFiles,
   validateProjectPath,
 } from "../utils/fileUtils.js";
+import { safeHandler } from "../utils/toolUtils.js";
 
 /**
  * Core data-file tools: list, read raw, write raw.
@@ -21,18 +22,18 @@ export function registerCoreTools(server: McpServer): void {
         .string()
         .describe("Absolute path to the RPG Maker MV project root."),
     },
-    async ({ projectPath }) => {
+    safeHandler(async ({ projectPath }) => {
       validateProjectPath(projectPath);
       const files = listDataFiles(projectPath);
       return {
         content: [
           {
             type: "text",
-            text: files.join("\n"),
+            text: files.length > 0 ? files.join("\n") : "No data files found.",
           },
         ],
       };
-    }
+    })
   );
 
   // ── list_map_files ───────────────────────────────────────────────────────
@@ -44,7 +45,7 @@ export function registerCoreTools(server: McpServer): void {
         .string()
         .describe("Absolute path to the RPG Maker MV project root."),
     },
-    async ({ projectPath }) => {
+    safeHandler(async ({ projectPath }) => {
       validateProjectPath(projectPath);
       const files = listMapFiles(projectPath);
       return {
@@ -55,7 +56,7 @@ export function registerCoreTools(server: McpServer): void {
           },
         ],
       };
-    }
+    })
   );
 
   // ── read_data_file ───────────────────────────────────────────────────────
@@ -72,7 +73,7 @@ export function registerCoreTools(server: McpServer): void {
           "Name of the data file without extension (e.g. 'Actors', 'Map001') or with extension (e.g. 'Actors.json')."
         ),
     },
-    async ({ projectPath, fileName }) => {
+    safeHandler(async ({ projectPath, fileName }) => {
       const data = readDataFile<unknown>(projectPath, fileName);
       return {
         content: [
@@ -82,7 +83,7 @@ export function registerCoreTools(server: McpServer): void {
           },
         ],
       };
-    }
+    })
   );
 
   // ── write_data_file ──────────────────────────────────────────────────────
@@ -102,7 +103,7 @@ export function registerCoreTools(server: McpServer): void {
         .string()
         .describe("JSON string to write. Must be valid JSON."),
     },
-    async ({ projectPath, fileName, content }) => {
+    safeHandler(async ({ projectPath, fileName, content }) => {
       let parsed: unknown;
       try {
         parsed = JSON.parse(content);
@@ -118,14 +119,15 @@ export function registerCoreTools(server: McpServer): void {
         };
       }
       writeDataFile(projectPath, fileName, parsed);
+      const baseName = fileName.endsWith(".json") ? fileName : `${fileName}.json`;
       return {
         content: [
           {
             type: "text",
-            text: `Successfully wrote ${fileName}.json (backup created as ${fileName}.json.bak).`,
+            text: `Successfully wrote ${baseName} (backup created as ${baseName}.bak).`,
           },
         ],
       };
-    }
+    })
   );
 }

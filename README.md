@@ -267,7 +267,9 @@ referenceType: "skillId", referenceId: 5
 
 ## Data Safety
 
-- All write operations automatically create a `.bak` backup before overwriting.
+- All write operations create a `.bak` backup before overwriting and use an atomic temp-file + rename to prevent partial-write corruption on crash.
+- File-name parameters are sanitized to prevent path traversal outside the project's `data/` directory.
+- Tool errors are returned as MCP error responses instead of crashing the server process.
 - Backup files are excluded from git via `.gitignore`.
 
 ---

@@ -1,7 +1,24 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { readDataFile, writeDataFile } from "../utils/fileUtils.js";
+import { safeHandler, parseJsonObject } from "../utils/toolUtils.js";
 import type { RPGSystem } from "../types/rpgmaker.js";
+
+/**
+ * Hard cap to prevent absurd allocations from a malformed prompt
+ * (e.g. asking to rename switch 1_000_000_000).
+ */
+const MAX_NAMED_SLOT_ID = 100_000;
+
+function listNamedSlots(
+  arr: string[] | undefined,
+  label: string
+): string {
+  const lines = (arr ?? [])
+    .map((name, i) => (i === 0 ? null : `${label} ${i}: ${name || "(unnamed)"}`))
+    .filter((l): l is string => l !== null);
+  return lines.length > 0 ? lines.join("\n") : `No ${label.toLowerCase()}s defined.`;
+}
 
 /**
  * Register system-settings MCP tools.
@@ -16,12 +33,12 @@ export function registerSystemTools(server: McpServer): void {
         .string()
         .describe("Absolute path to the RPG Maker MV project root."),
     },
-    async ({ projectPath }) => {
+    safeHandler(async ({ projectPath }) => {
       const system = readDataFile<RPGSystem>(projectPath, "System");
       return {
         content: [{ type: "text", text: JSON.stringify(system, null, 2) }],
       };
-    }
+    })
   );
 
   // ── update_system ─────────────────────────────────────────────────────────
@@ -38,23 +55,15 @@ export function registerSystemTools(server: McpServer): void {
           'JSON object with System properties to update. Example: {"gameTitle": "My Game", "currencyUnit": "G"}'
         ),
     },
-    async ({ projectPath, properties }) => {
-      let props: Partial<RPGSystem>;
-      try {
-        props = JSON.parse(properties) as Partial<RPGSystem>;
-      } catch (e) {
-        return {
-          isError: true,
-          content: [{ type: "text", text: `Invalid JSON: ${(e as Error).message}` }],
-        };
-      }
+    safeHandler(async ({ projectPath, properties }) => {
+      const props = parseJsonObject(properties, "properties");
       const system = readDataFile<RPGSystem>(projectPath, "System");
       const updated = { ...system, ...props };
       writeDataFile(projectPath, "System", updated);
       return {
         content: [{ type: "text", text: "System.json updated successfully." }],
       };
-    }
+    })
   );
 
   // ── get_switches ──────────────────────────────────────────────────────────
@@ -66,15 +75,12 @@ export function registerSystemTools(server: McpServer): void {
         .string()
         .describe("Absolute path to the RPG Maker MV project root."),
     },
-    async ({ projectPath }) => {
+    safeHandler(async ({ projectPath }) => {
       const system = readDataFile<RPGSystem>(projectPath, "System");
-      const lines = (system.switches ?? [])
-        .map((name, i) => (i === 0 ? null : `Switch ${i}: ${name || "(unnamed)"}`) )
-        .filter((l): l is string => l !== null);
       return {
-        content: [{ type: "text", text: lines.join("\n") || "No switches defined." }],
+        content: [{ type: "text", text: listNamedSlots(system.switches, "Switch") }],
       };
-    }
+    })
   );
 
   // ── update_switch_name ────────────────────────────────────────────────────
@@ -89,11 +95,15 @@ export function registerSystemTools(server: McpServer): void {
         .number()
         .int()
         .positive()
+        .max(MAX_NAMED_SLOT_ID)
         .describe("1-based switch ID."),
       name: z.string().describe("New name for the switch."),
     },
-    async ({ projectPath, switchId, name }) => {
+    safeHandler(async ({ projectPath, switchId, name }) => {
       const system = readDataFile<RPGSystem>(projectPath, "System");
+      if (!Array.isArray(system.switches)) {
+        system.switches = [""];
+      }
       while (system.switches.length <= switchId) {
         system.switches.push("");
       }
@@ -102,7 +112,7 @@ export function registerSystemTools(server: McpServer): void {
       return {
         content: [{ type: "text", text: `Switch ${switchId} renamed to "${name}".` }],
       };
-    }
+    })
   );
 
   // ── get_variables ─────────────────────────────────────────────────────────
@@ -114,15 +124,14 @@ export function registerSystemTools(server: McpServer): void {
         .string()
         .describe("Absolute path to the RPG Maker MV project root."),
     },
-    async ({ projectPath }) => {
+    safeHandler(async ({ projectPath }) => {
       const system = readDataFile<RPGSystem>(projectPath, "System");
-      const lines = (system.variables ?? [])
-        .map((name, i) => (i === 0 ? null : `Variable ${i}: ${name || "(unnamed)"}`))
-        .filter((l): l is string => l !== null);
       return {
-        content: [{ type: "text", text: lines.join("\n") || "No variables defined." }],
+        content: [
+          { type: "text", text: listNamedSlots(system.variables, "Variable") },
+        ],
       };
-    }
+    })
   );
 
   // ── update_variable_name ──────────────────────────────────────────────────
@@ -137,11 +146,15 @@ export function registerSystemTools(server: McpServer): void {
         .number()
         .int()
         .positive()
+        .max(MAX_NAMED_SLOT_ID)
         .describe("1-based variable ID."),
       name: z.string().describe("New name for the variable."),
     },
-    async ({ projectPath, variableId, name }) => {
+    safeHandler(async ({ projectPath, variableId, name }) => {
       const system = readDataFile<RPGSystem>(projectPath, "System");
+      if (!Array.isArray(system.variables)) {
+        system.variables = [""];
+      }
       while (system.variables.length <= variableId) {
         system.variables.push("");
       }
@@ -152,7 +165,7 @@ export function registerSystemTools(server: McpServer): void {
           { type: "text", text: `Variable ${variableId} renamed to "${name}".` },
         ],
       };
-    }
+    })
   );
 
   // ── get_elements ──────────────────────────────────────────────────────────
@@ -164,15 +177,14 @@ export function registerSystemTools(server: McpServer): void {
         .string()
         .describe("Absolute path to the RPG Maker MV project root."),
     },
-    async ({ projectPath }) => {
+    safeHandler(async ({ projectPath }) => {
       const system = readDataFile<RPGSystem>(projectPath, "System");
-      const lines = (system.elements ?? [])
-        .map((name, i) => (i === 0 ? null : `Element ${i}: ${name || "(unnamed)"}`))
-        .filter((l): l is string => l !== null);
       return {
-        content: [{ type: "text", text: lines.join("\n") || "No elements defined." }],
+        content: [
+          { type: "text", text: listNamedSlots(system.elements, "Element") },
+        ],
       };
-    }
+    })
   );
 
   // ── get_skill_types ───────────────────────────────────────────────────────
@@ -184,15 +196,14 @@ export function registerSystemTools(server: McpServer): void {
         .string()
         .describe("Absolute path to the RPG Maker MV project root."),
     },
-    async ({ projectPath }) => {
+    safeHandler(async ({ projectPath }) => {
       const system = readDataFile<RPGSystem>(projectPath, "System");
-      const lines = (system.skillTypes ?? [])
-        .map((name, i) => (i === 0 ? null : `SkillType ${i}: ${name || "(unnamed)"}`))
-        .filter((l): l is string => l !== null);
       return {
-        content: [{ type: "text", text: lines.join("\n") || "No skill types defined." }],
+        content: [
+          { type: "text", text: listNamedSlots(system.skillTypes, "SkillType") },
+        ],
       };
-    }
+    })
   );
 
   // ── get_weapon_types ──────────────────────────────────────────────────────
@@ -204,15 +215,14 @@ export function registerSystemTools(server: McpServer): void {
         .string()
         .describe("Absolute path to the RPG Maker MV project root."),
     },
-    async ({ projectPath }) => {
+    safeHandler(async ({ projectPath }) => {
       const system = readDataFile<RPGSystem>(projectPath, "System");
-      const lines = (system.weaponTypes ?? [])
-        .map((name, i) => (i === 0 ? null : `WeaponType ${i}: ${name || "(unnamed)"}`))
-        .filter((l): l is string => l !== null);
       return {
-        content: [{ type: "text", text: lines.join("\n") || "No weapon types defined." }],
+        content: [
+          { type: "text", text: listNamedSlots(system.weaponTypes, "WeaponType") },
+        ],
       };
-    }
+    })
   );
 
   // ── get_armor_types ───────────────────────────────────────────────────────
@@ -224,14 +234,13 @@ export function registerSystemTools(server: McpServer): void {
         .string()
         .describe("Absolute path to the RPG Maker MV project root."),
     },
-    async ({ projectPath }) => {
+    safeHandler(async ({ projectPath }) => {
       const system = readDataFile<RPGSystem>(projectPath, "System");
-      const lines = (system.armorTypes ?? [])
-        .map((name, i) => (i === 0 ? null : `ArmorType ${i}: ${name || "(unnamed)"}`))
-        .filter((l): l is string => l !== null);
       return {
-        content: [{ type: "text", text: lines.join("\n") || "No armor types defined." }],
+        content: [
+          { type: "text", text: listNamedSlots(system.armorTypes, "ArmorType") },
+        ],
       };
-    }
+    })
   );
 }
