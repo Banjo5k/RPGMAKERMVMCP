@@ -20,7 +20,7 @@ import { registerPluginTools } from "./tools/pluginTools.js";
 import { registerValidationTools } from "./tools/validationTools.js";
 
 const SERVER_NAME = "rpgmaker-mv-mcp";
-const SERVER_VERSION = "1.0.0";
+const SERVER_VERSION = "1.0.1";
 
 async function main(): Promise<void> {
   const server = new McpServer({
@@ -45,6 +45,20 @@ async function main(): Promise<void> {
     `[${SERVER_NAME}] v${SERVER_VERSION} started. Listening on stdio.\n`
   );
 }
+
+// Last-resort safety nets. Tool handlers already wrap their work in
+// try/catch via safeHandler, but this prevents an unrelated async
+// throw (e.g. transport hiccup) from silently killing the process.
+process.on("uncaughtException", (err) => {
+  process.stderr.write(
+    `[${SERVER_NAME}] Uncaught exception: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`
+  );
+});
+process.on("unhandledRejection", (reason) => {
+  process.stderr.write(
+    `[${SERVER_NAME}] Unhandled rejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}\n`
+  );
+});
 
 main().catch((err: unknown) => {
   process.stderr.write(`[${SERVER_NAME}] Fatal error: ${String(err)}\n`);

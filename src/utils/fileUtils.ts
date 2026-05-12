@@ -11,12 +11,44 @@ export function readDataFile<T>(projectPath: string, fileName: string): T {
     throw new Error(`Data file not found: ${filePath}`);
   }
   const raw = fs.readFileSync(filePath, "utf-8");
-  return JSON.parse(raw) as T;
+  try {
+    return JSON.parse(raw) as T;
+  } catch (e) {
+    throw new Error(
+      `Failed to parse JSON in ${filePath}: ${(e as Error).message}`
+    );
+  }
+}
+
+/**
+ * Atomically writes string content to a file by writing to a sibling
+ * temp file and renaming over the destination. This prevents partial
+ * writes from corrupting RPG Maker MV project data on crash / power loss.
+ */
+function atomicWriteFile(filePath: string, content: string): void {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    fs.writeFileSync(tmpPath, content, "utf-8");
+    fs.renameSync(tmpPath, filePath);
+  } catch (e) {
+    // Best-effort cleanup of stray temp file
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {
+      /* ignore */
+    }
+    throw e;
+  }
 }
 
 /**
  * Writes data to a JSON file in the RPG Maker MV project data directory.
- * Creates a .bak backup of the original file before writing.
+ * Creates a .bak backup of the original file before writing, and writes
+ * atomically to prevent partial-write corruption.
  */
 export function writeDataFile(
   projectPath: string,
@@ -27,17 +59,11 @@ export function writeDataFile(
 
   // Create backup if file exists
   if (fs.existsSync(filePath)) {
-    const backupPath = filePath + ".bak";
-    fs.copyFileSync(filePath, backupPath);
-  }
-
-  const dir = path.dirname(filePath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+    fs.copyFileSync(filePath, filePath + ".bak");
   }
 
   const content = JSON.stringify(data, null, 2);
-  fs.writeFileSync(filePath, content, "utf-8");
+  atomicWriteFile(filePath, content);
 }
 
 /**
@@ -82,15 +108,52 @@ export function listMapFiles(projectPath: string): string[] {
 /**
  * Resolves the full path to a data file.
  * Accepts file names with or without the .json extension.
+ *
+ * Hardened against path-traversal: the file name must be a plain
+ * file name (no directory separators, no `..` segments, not absolute)
+ * and must resolve to a path inside the project's `data/` directory.
  */
 export function resolveDataPath(projectPath: string, fileName: string): string {
+  if (typeof fileName !== "string" || fileName.length === 0) {
+    throw new Error("fileName must be a non-empty string.");
+  }
   const name = fileName.endsWith(".json") ? fileName : `${fileName}.json`;
-  return path.join(projectPath, "data", name);
+  assertSafeRelativeName(name, "fileName");
+
+  const dataDir = path.resolve(projectPath, "data");
+  const resolved = path.resolve(dataDir, name);
+  // Ensure the resolved path stays inside the data directory.
+  const rel = path.relative(dataDir, resolved);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error(`Unsafe fileName rejected: ${fileName}`);
+  }
+  return resolved;
+}
+
+/**
+ * Validates that a name is a safe single-segment relative file name.
+ * Rejects absolute paths, parent traversals, and path separators.
+ */
+function assertSafeRelativeName(name: string, label: string): void {
+  if (
+    name.includes("\0") ||
+    name.includes("/") ||
+    name.includes("\\") ||
+    name === "." ||
+    name === ".." ||
+    name.split(/[\\/]/).some((seg) => seg === "..") ||
+    path.isAbsolute(name)
+  ) {
+    throw new Error(`Unsafe ${label} rejected: ${name}`);
+  }
 }
 
 /**
  * Reads a plugins file (js/plugins.js) which uses a special format.
  * RPG Maker MV stores plugins in a JS assignment, not pure JSON.
+ *
+ * Tolerates `var`, `let`, `const`, optional trailing semicolon and
+ * any trailing whitespace/comments after the array literal.
  */
 export function readPluginsFile(projectPath: string): RPGPlugin[] {
   const filePath = path.join(projectPath, "js", "plugins.js");
@@ -98,16 +161,26 @@ export function readPluginsFile(projectPath: string): RPGPlugin[] {
     throw new Error(`Plugins file not found: ${filePath}`);
   }
   const raw = fs.readFileSync(filePath, "utf-8");
-  // Strip the JS variable assignment wrapper: var $plugins = [...];
-  const match = raw.match(/var\s+\$plugins\s*=\s*(\[[\s\S]*\])\s*;?\s*$/m);
+  // Strip the JS variable assignment wrapper: (var|let|const) $plugins = [...];
+  const match = raw.match(
+    /(?:var|let|const)\s+\$plugins\s*=\s*(\[[\s\S]*\])\s*;?/
+  );
   if (!match) {
     throw new Error("Could not parse plugins.js – unexpected format.");
   }
-  return JSON.parse(match[1]) as RPGPlugin[];
+  try {
+    return JSON.parse(match[1]) as RPGPlugin[];
+  } catch (e) {
+    throw new Error(
+      `Could not parse plugins.js – invalid JSON in $plugins array: ${
+        (e as Error).message
+      }`
+    );
+  }
 }
 
 /**
- * Writes the plugins array back to js/plugins.js.
+ * Writes the plugins array back to js/plugins.js (atomically, with a .bak).
  */
 export function writePluginsFile(
   projectPath: string,
@@ -119,8 +192,12 @@ export function writePluginsFile(
     fs.copyFileSync(filePath, filePath + ".bak");
   }
 
-  const content = `// RPG Maker MV\nvar $plugins =\n${JSON.stringify(plugins, null, 2)};\n`;
-  fs.writeFileSync(filePath, content, "utf-8");
+  const content = `// RPG Maker MV\nvar $plugins =\n${JSON.stringify(
+    plugins,
+    null,
+    2
+  )};\n`;
+  atomicWriteFile(filePath, content);
 }
 
 /**
@@ -138,13 +215,20 @@ export function findById<T extends { id: number }>(
 /**
  * Upserts a record into an RPG Maker MV database array.
  * The array uses 1-based IDs (index 0 is always null).
- * If the record's ID is 0 or exceeds the array bounds, it is appended.
+ * If the record's ID is 0 or exceeds the array bounds, it is appended
+ * and assigned the next available ID.
  */
 export function upsertRecord<T extends { id: number }>(
   arr: (T | null)[],
   record: T
 ): (T | null)[] {
   const clone = [...arr];
+  // Ensure RPG Maker MV's 1-based-ID invariant: index 0 must be null.
+  if (clone.length === 0) {
+    clone.push(null);
+  } else if (clone[0] !== null) {
+    clone.unshift(null);
+  }
   if (record.id > 0 && record.id < clone.length) {
     clone[record.id] = record;
   } else {
